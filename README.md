@@ -145,39 +145,8 @@ send_timeout 5s;
  
 ## 2.4	TCP SYN Flood
 При данном типе DDoS-атаки боты отправляют SYN-пакеты, но игнорируют ответные SYN-ACK от сервера. Это приводит к заполнению очереди полуоткрытых соединений (backlog) на уровне ядра ОС.
-Для генерации RAW-пакетов (TCP SYN) поду требуются расширенные сетевые привилегии (NET_ADMIN). Создадим файл манифеста bot-syn.yaml:
-apiVersion: v1
-kind: Pod
-metadata:
-  name: bot-syn
-  namespace: botnet
-  labels:
-    app: bot-syn
-spec:
-  containers:
-  - name: attacker
-    image: dockerhub.timeweb.cloud/library/alpine:latest
-    command:
-      - /bin/sh
-      - -c
-      - |
-        # Записываем репозитории построчно через echo (безопасно для YAML)
-        echo "http://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/repositories
-        echo "http://mirror.yandex.ru/mirrors/alpine/v3.20/community" >> /etc/apk/repositories
-        echo "http://mirror.yandex.ru/mirrors/alpine/edge/testing" >> /etc/apk/repositories
-        apk update
-        apk add --no-cache hping3 nmap tcpdump iptables iproute2 curl openssl || true
-        sleep 3600
-    securityContext:
-      capabilities:
-        add: ["NET_ADMIN"]
-    resources:
-      limits:
-        cpu: "200m"
-        memory: "256Mi"
-      requests:
-        cpu: "100m"
-        memory: "128Mi"
+Для генерации RAW-пакетов (TCP SYN) поду требуются расширенные сетевые привилегии (NET_ADMIN). Создадим файл манифеста bot-syn.yaml
+
 Примените манифест:
 kubectl apply -f bot-syn.yaml
 
