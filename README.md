@@ -44,84 +44,8 @@ kubectl create namespace victim
 kubectl create namespace botnet
  
 В качестве «жертвы» используется веб-сервер nginx, его конфигурация должна хранится в файле target.yaml:
-Создайте файл target.yaml:
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-config
-  namespace: victim
-data:
-  default.conf: |
-    server {
-        listen 80;
-        location / {
-            root   /usr/share/nginx/html;
-            index  index.html index.htm;
-        }
-    }
+Создайте файл target.yaml
 
-apiVersion: v1
-kind: Pod 
-metadata:
-  name: target-server 
-  namespace: victim
-  labels:
-    app: web # <--- Лейбл обязателен, чтобы Service его нашел
-spec:
-  initContainers:
-  - name: init-config
-    image: dockerhub.timeweb.cloud/library/alpine:latest
-    command: ['sh', '-c', 'cat /tmp/config/default.conf > /etc/nginx/conf.d/default.conf']
-    volumeMounts:
-    - name: config-source
-      mountPath: /tmp/config
-    - name: editable-config
-      mountPath: /etc/nginx/conf.d
-  containers:
-  - name: nginx
-    image: dockerhub.timeweb.cloud/library/nginx:alpine
-    securityContext:
-      privileged: true
-    ports:
-    - containerPort: 80
-    - containerPort: 443
-    resources:
-      limits:
-        cpu: "200m"
-        memory: "256Mi"   
-      requests:
-        cpu: "100m"
-        memory: "128Mi"   
-    volumeMounts:
-    - name: editable-config
-      mountPath: /etc/nginx/conf.d
-  volumes:
-  - name: config-source
-    configMap:
-      name: nginx-config
-  - name: editable-config
-    emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: target-service
-  namespace: victim
-spec:
-  type: NodePort
-  externalTrafficPolicy: Local
-  selector:
-    app: web
-  ports:
-  - name: http
-    protocol: TCP
-    port: 80
-    targetPort: 80
-  - name: https
-    protocol: TCP
-    port: 443
-    targetPort: 443
----
 Чтобы запустить «под» веб-сервера воспользуйтесь командой
 kubectl apply -f target.yaml
  
