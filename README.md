@@ -411,21 +411,21 @@ ip link show eth0
 
 
 Примените политику к кластеру:
-kubectl apply -f isolate-victim.yaml
+`kubectl apply -f isolate-victim.yaml`
  
 
 Для корректной работы Network Policies в Minikube он должен быть запущен с поддержкой CNI-плагина, умеющего их обрабатывать, например: 
-minikube start --network-plugin=cni --cni=calico
+`minikube start --network-plugin=cni --cni=calico`
 
 Снова вернитесь в консоль атакующего пода в пространстве botnet:
-kubectl exec -it bot-syn -n botnet -- sh
+`kubectl exec -it bot-syn -n botnet -- sh`
 
 Повторите попытку запроса:
-curl -m 5 -I http://target-service.victim.svc.cluster.local
+`curl -m 5 -I http://target-service.victim.svc.cluster.local`
  
 
 Удалите политику после тестирования
-kubectl delete -f isolate-victim.yaml
+`kubectl delete -f isolate-victim.yaml`
  
  
 ## 2.10	Настройка межсетевого экрана (МСЭ) и эшелонированной защиты (дополнительное задание)
@@ -434,30 +434,31 @@ kubectl delete -f isolate-victim.yaml
 ### 2.10.1	Защита на сетевом и транспортном уровнях (L3/L4 МСЭ)
 Системный межсетевой экран iptables позволяет отсечь грубый флуд и нелегитимные пакеты до того, как они достигнут приложения.
 Зайдите в привилегированный контейнер сервера-жертвы:
-kubectl exec -it -n victim target-server – sh
+`kubectl exec -it -n victim target-server – sh`
 
 Настройте правила iptables для защиты от флуда и блокировки вредоносных узлов:
 1. Блокировка конкретного IP-адреса ботнета (пример)
     Замените <IP_бота> на реальный IP из вывода kubectl get pods -n botnet -o wide
-iptables -A INPUT -s <IP_бота> -j DROP
+`iptables -A INPUT -s <IP_бота> -j DROP`
 
 2. Защита от TCP SYN Flood – ограничение скорости новых SYN-пакетов
-iptables -A INPUT -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT
-iptables -A INPUT -p tcp --syn -j DROP
+`iptables -A INPUT -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT`
+`iptables -A INPUT -p tcp --syn -j DROP`
 
 3. Отбрасывание невалидных пакетов (сканирование, спуфинг)
-iptables -A INPUT -m state --state INVALID -j DROP
+`iptables -A INPUT -m state --state INVALID -j DROP`
 
 Важно: Настройки sysctl для защиты от SYN-флуда (net.ipv4.tcp_syncookies=1 и net.ipv4.tcp_max_syn_backlog=4096) уже включены на ноде Minikube по умолчанию. Внутри контейнера эти параметры менять бессмысленно, так как они относятся к пространству имён ядра хоста. Для реальных кластеров настройки производятся на уровне worker-нод, а не в подах.
 
 ## 2.10.2	Изоляция сегментов сети (Защита от VLAN Hopping / Spoofing)
 Чтобы злоумышленник не смог атаковать внутренние сервисы с подмененных адресов или свободно перемещаться между пространствами имен кластера, необходимо применить сетевую политику на уровне оркестратора.
 Откройте новый терминал (вне подов) и примените политику, разрешающую доступ к серверу только доверенному трафику:
-kubectl apply -f isolate-victim.yaml
+`kubectl apply -f isolate-victim.yaml`
 
 ## 2.10.3	Защита на прикладном уровне (L7 WAF / Nginx)
 Настройки МСЭ бессильны, если атака имитирует легитимный трафик (например, Slowloris или HTTP GET Flood от разных ботов). В этом случае фильтрацию должен осуществлять сам веб-сервер.
 В поде target-server полностью перезапишите конфигурацию /etc/nginx/conf.d/default.conf:
+```
 cat << 'EOF' > /etc/nginx/conf.d/default.conf
 limit_req_zone $binary_remote_addr zone=l7_limit:10m rate=5r/s;
 
@@ -509,17 +510,18 @@ server {
     }
 }
 EOF
+```
 
 Перезапустите конфигурацию Nginx для применения изменений:
-nginx -t && nginx -s reload
+`nginx -t && nginx -s reload`
 
 ### 2.10.4	Защита от сниффинга и привилегированных подов (Pod Security)
 Сниффинг трафика становится возможен, если злоумышленник запустит под с hostNetwork: true и privileged: true. Чтобы запретить такие манифесты в namespace botnet, применим Pod Security Standards (встроенный admission controller).
-
+`
 kubectl label --overwrite namespace botnet \
   pod-security.kubernetes.io/enforce=baseline \
   pod-security.kubernetes.io/audit=baseline \
-  pod-security.kubernetes.io/warn=baseline
+  pod-security.kubernetes.io/warn=baseline`
 После этого попытка создать под с hostNetwork: true или privileged: true в namespace botnet будет отклонена API-сервером (см. раздел 2.8). Для удаления меток используйте kubectl label namespace botnet pod-security.kubernetes.io/enforce- и т.д.
 
 ### 2.10.5	Повторное тестирование 
