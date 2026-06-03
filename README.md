@@ -37,8 +37,8 @@ minikube status
 Убедитесь, что компоненты host, kubelet и apiserver находятся в статусе Running
  
  
-2. Сценарий выполнения работы
-2.1 Настройка веб-сервера
+**2. Сценарий выполнения работы**
+**2.1 Настройка веб-сервера**
 Создайте следующие пространства имен для «жертвы» и «ботнета»
 kubectl create namespace victim
 kubectl create namespace botnet
