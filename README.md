@@ -45,7 +45,6 @@ kubectl create namespace botnet
  
 В качестве «жертвы» используется веб-сервер nginx, его конфигурация должна хранится в файле target.yaml:
 Создайте файл target.yaml:
-
 apiVersion: v1
 kind: ConfigMap
 metadata:
