@@ -355,27 +355,22 @@ ip link show eth0
 ## 2.8	TCP Session Hijacking и сниффинг трафика
 В традиционных сетях для перехвата чужого трафика злоумышленники используют атаки типа ARP-Spoofing. В Kubernetes виртуальная сеть (CNI) изолирует сетевые интерфейсы подов , делая классический L2-перехват невозможным.  
 Однако, если администратор кластера допускает ошибку в конфигурации безопасности и позволяет запускать поды с параметром hostNetwork: true, злоумышленник может «вырваться» из изолированного пространства имен пода и получить доступ к корневому сетевому интерфейсу самой ноды кластера (worker node). С этого момента он сможет прослушивать нешифрованный трафик всех подов, запущенных на этом узле.
-Смоделируем ситуацию, при которой злоумышленник развернул в пространстве botnet под с доступом к сети хоста. Создайте файл bot-sniffer.yaml:
-
+Смоделируем ситуацию, при которой злоумышленник развернул в пространстве botnet под с доступом к сети хоста. Создайте файл bot-sniffer.yaml
 
 Примените манифест:
-kubectl apply -f bot-sniffer.yaml
+`kubectl apply -f bot-sniffer.yaml`
 
 Зайдите в терминал атакующего пода bot-sniffer:
-kubectl exec -it bot-sniffer -n botnet -- sh
+`kubectl exec -it bot-sniffer -n botnet -- sh`
 Так как под находится в сети хоста, интерфейс eth0 или any теперь охватывает весь проходящий трафик узла. Запустите сниффер, перехватывающий все HTTP-пакеты, идущие на порт 80 (оставьте этот терминал открытым):
-tcpdump -A -i any dst port 80
+`tcpdump -A -i any dst port 80`
  
 Откройте второе окно терминала. Мы сымитируем легитимного пользователя, который отправляет запрос из совершенно другого пода (например, из нашего старого пода bot-syn или любого другого тестового пода без привилегий).
 Зайдите в другой под:
-kubectl exec -it bot-syn -n botnet -- sh
+`kubectl exec -it bot-syn -n botnet -- sh`
 
-curl -X POST http://target-service.victim.svc.cluster.local/login -d "username=admin&password=secretpassword"
+`curl -X POST http://target-service.victim.svc.cluster.local/login -d "username=admin&password=secretpassword"`
  
- 
-
-
-
 Защита:
 Единственным надежным способом защиты данных от перехвата является обязательное шифрование канала (переход на HTTPS) и внедрение заголовка HSTS. Настройка шифрования была в разделе 2.6.
 
@@ -383,20 +378,20 @@ curl -X POST http://target-service.victim.svc.cluster.local/login -d "username=a
 
 Откройте терминал на хост-машине (вне подов).
 Назначьте пространству имен botnet строгую политику безопасности (уровень baseline запрещает использование hostNetwork и privileged):
-kubectl label --overwrite namespace botnet pod-security.kubernetes.io/enforce=baseline
+`kubectl label --overwrite namespace botnet pod-security.kubernetes.io/enforce=baseline`
  
 Удалите текущий атакующий под-сниффер:
-kubectl delete -f bot-sniffer.yaml
+`kubectl delete -f bot-sniffer.yaml`
 
 Проверка 
 Попытайтесь развернуть уязвимый под заново:
-kubectl apply -f bot-sniffer.yaml
+`kubectl apply -f bot-sniffer.yaml`
  
 
 Чтобы отменить принудительное применение политики безопасности baseline для пространства имен botnet, вам нужно удалить соответствующие метки (labels), которые вы установили ранее.
-kubectl label namespace botnet pod-security.kubernetes.io/enforce-
-kubectl label namespace botnet pod-security.kubernetes.io/audit-
-kubectl label namespace botnet pod-security.kubernetes.io/warn-
+`kubectl label namespace botnet pod-security.kubernetes.io/enforce-`
+`kubectl label namespace botnet pod-security.kubernetes.io/audit-`
+`kubectl label namespace botnet pod-security.kubernetes.io/warn-`
  
 ## 2.9	Обход логической изоляции сети (Аналог VLAN Hopping в Kubernetes)
 Реализовать классический VLAN Hopping (атака по протоколу 802.1Q) в стандартном окружении Minikube невозможно. Причина в архитектуре: Kubernetes и Minikube используют виртуальные оверлейные сети (Overlay Networks, такие как Flannel, Calico или Cilium), которые инкапсулируют трафик (чаще всего через VXLAN или IP-in-IP) и работают поверх сетевого уровня (L3). В этой среде нет виртуальных L2-коммутаторов с транковыми портами и не используются протоколы согласования транков (например, DTP), которые являются главной целью при атаках Switch Spoofing или Double Tagging.
@@ -404,31 +399,16 @@ kubectl label namespace botnet pod-security.kubernetes.io/warn-
 По умолчанию сеть в Kubernetes является «плоской» (Flat Network) — любой под может связаться с любым другим подом, даже если они находятся в разных пространствах имен. Если администратор не настроил явную изоляцию, злоумышленник, скомпрометировавший узел в сегменте botnet, может беспрепятственно атаковать критические сервисы в сегменте victim.
 
 Зайдите в терминал атакующего пода bot-syn, который находится в пространстве имен botnet:
-kubectl exec -it bot-syn -n botnet -- sh
+`kubectl exec -it bot-syn -n botnet -- sh`
 
 Попробуйте обратиться к веб-серверу, который находится в логически изолированном пространстве victim:
-curl -I http://target-service.victim.svc.cluster.local
+`curl -I http://target-service.victim.svc.cluster.local`
 Вы получите успешный ответ (HTTP 200 OK). Это демонстрирует, что логическая граница между пространствами имен проницаема, и злоумышленник может «перепрыгнуть» из сегмента бота в сегмент жертвы.
  
 Защита:
 Для предотвращения несанкционированного доступа между сегментами необходимо внедрить сетевые политики (Network Policies), которые работают на уровне CNI-плагина и выполняют роль строгих списков контроля доступа (ACL).
 Откройте новый терминал (вне подов) и создайте файл манифеста isolate-victim.yaml. Данная политика запретит любой входящий трафик к подам с меткой app: web в пространстве victim, кроме трафика из самого пространства victim (или других разрешенных источников, если потребуется):
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny-ingress
-  namespace: victim
-spec:
-  podSelector:
-    matchLabels:
-      app: web
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: victim
+
 
 Примените политику к кластеру:
 kubectl apply -f isolate-victim.yaml
